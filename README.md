@@ -53,7 +53,4 @@
 ## Документы
 
 - [Сценарии, критерии приёмки и жизненный цикл Job](docs/requirements.md).
-- [Backlog и распределение задач](BACKLOG.md).
 - [Правила разработки и Definition of Done](CONTRIBUTING.md).
-- [Зафиксированные решения проекта](PROJECT_CONTEXT.md).
-- [Что заполнить и проверить перед сдачей](SUBMISSION_CHECKLIST.md).
