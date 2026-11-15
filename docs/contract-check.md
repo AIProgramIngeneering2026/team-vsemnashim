@@ -1,6 +1,6 @@
 # Проверка контракта практики 2
 
-Дата: 15 ноября 2026 года. Проверили контракт FairfaxStat по колоде К1–К10: [архитектуру](architecture.md), [автомат Job](job-lifecycle.md), [OpenAPI](api/openapi.yaml), [правила HTTP](api/README.md), [контракт Tool](tool-contract.md) и ADR-0001–0004.
+Проверили контракт FairfaxStat по колоде К1–К10: [архитектуру](architecture.md), [автомат Job](job-lifecycle.md), [OpenAPI](api/openapi.yaml), [правила HTTP](api/README.md), [контракт Tool](tool-contract.md) и ADR-0001–0004.
 
 Для всех десяти карт определены ответы. Отмену Job из К6 не поддерживаем; причина и условия пересмотра записаны в ADR-0004.
 
