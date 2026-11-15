@@ -54,3 +54,12 @@
 
 - [Сценарии, критерии приёмки и жизненный цикл Job](docs/requirements.md).
 - [Правила разработки и Definition of Done](CONTRIBUTING.md).
+- [Архитектура: контекст и компоненты](docs/architecture.md).
+- [Состояния Job и восстановление после сбоя](docs/job-lifecycle.md).
+- [Контракт HTTP API — OpenAPI 3.1.0](docs/api/openapi.yaml) и [правила запросов](docs/api/README.md).
+- [Контракт двух Tool](docs/tool-contract.md).
+- [ADR-0001: один процесс](docs/adr/0001-single-process.md).
+- [ADR-0002: постоянная очередь и результат](docs/adr/0002-durable-jobs.md).
+- [ADR-0003: идентичность клиента и отправки](docs/adr/0003-request-identity.md).
+- [ADR-0004: без отмены и повторного открытия Job](docs/adr/0004-no-cancellation.md).
+- [Проверка К1–К10 и предложения ИИ](docs/contract-check.md).
