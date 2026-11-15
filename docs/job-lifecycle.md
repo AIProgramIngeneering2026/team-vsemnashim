@@ -4,9 +4,9 @@
 ```mermaid
 stateDiagram-v2
     [*] --> queued: commit создания
-    queued --> running: захват; attempts + 1
+    queued --> running: захват, attempts + 1
     running --> succeeded: commit отчёта и успеха
-    running --> retry_wait: временный сбой или потеря worker; есть бюджет
+    running --> retry_wait: временный сбой или потеря worker, есть бюджет
     retry_wait --> queued: наступило next_attempt_at
     running --> failed: постоянная ошибка или исчерпан бюджет
     succeeded --> [*]
