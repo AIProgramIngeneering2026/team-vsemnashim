@@ -1,0 +1,879 @@
+openapi: 3.1.0
+info:
+  title: FairfaxStat API
+  version: 1.0.0
+  description: |
+    API анализа матчей Deadlock. Версия контракта от 2026-11-15.
+    Три операции: создать Job, прочитать Job, получить отчёт.
+    Все ответы JSON, Cache-Control: no-store. Все даты UTC с суффиксом Z.
+    Ошибка Job передаётся в успешном HTTP 200 чтения состояния;
+    ошибка самого HTTP-запроса — ErrorEnvelope с соответствующим HTTP-кодом.
+    Для доступа клиент генерирует и хранит анонимный bearer-секрет.
+    Семантические ограничения и порядок ошибок уточнены в README.md.
+servers:
+  - url: /api/v1
+security:
+  - ClientSecret: []
+tags:
+  - name: Jobs
+    description: Асинхронный анализ одного матча
+x-limits:
+  request-body-bytes: 8192
+  request-json-depth: 8
+  pending-jobs-global: 100
+  metadata-decoded-bytes: 33554432
+  metadata-json-depth: 64
+  report-utf8-bytes: 16777216
+  metadata-timeout-seconds: 30
+  report-timeout-seconds: 20
+  attempt-timeout-seconds: 60
+  lease-seconds: 90
+  max-attempts: 3
+  retry-delays-seconds: [5, 30]
+  max-retry-wait-seconds: 120
+x-router-errors:
+  unknown-path:
+    status: 404
+    code: ROUTE_NOT_FOUND
+    response:
+      $ref: '#/components/responses/RouteNotFound'
+  unsupported-method:
+    status: 405
+    code: METHOD_NOT_ALLOWED
+    response:
+      $ref: '#/components/responses/MethodNotAllowed'
+    allow-by-path:
+      /jobs: POST
+      /jobs/{job_id}: GET
+      /jobs/{job_id}/result: GET
+  description: |
+    /cancel, /restart, /retry, перечисление Job и изменение state отсутствуют.
+    Неизвестные маршруты дают 404, неподдерживаемые методы известных — 405.
+    Эти правила применяются без чтения Job и не раскрывают существование id.
+paths:
+  /jobs:
+    post:
+      tags: [Jobs]
+      operationId: createJob
+      summary: Создать анализ матча или вернуть ранее созданный Job
+      description: |
+        Только operation=analyze_match. Параметры валидируются до записи Job.
+        match_id передаётся строкой: убрать ASCII-пробелы по краям и ведущие нули;
+        проверить диапазон 1..18446744073709551615 без преобразования через float.
+        Идентичность запроса: нормализованные operation и match_id.
+        Уникальная пара (SHA-256 bearer-секрета, Idempotency-Key) хранится вместе
+        с Job бессрочно в v1. Эквивалентный повтор возвращает 200 и тот же Job
+        в текущем состоянии, включая терминальные. Другие параметры — 409.
+        Проверка повтора выполняется до лимита очереди. При новом ключе Job
+        и привязка ключа фиксируются одной транзакцией; ответ 202 после commit.
+        При ошибке до commit Job не создан; при потере/неопределённости commit
+        повторить тот же запрос с тем же секретом и ключом.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+            examples:
+              analyze:
+                value:
+                  operation: analyze_match
+                  params:
+                    match_id: '132598836'
+              normalizedRepeat:
+                value:
+                  operation: analyze_match
+                  params:
+                    match_id: ' 00132598836 '
+      responses:
+        '202':
+          description: Новый Job сохранён; возвращён снимок queued, attempts=0
+          headers:
+            Location:
+              $ref: '#/components/headers/JobLocation'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              examples:
+                queued:
+                  $ref: '#/components/examples/QueuedJob'
+        '200':
+          description: Эквивалентный повтор; прежний ID и актуальное состояние
+          headers:
+            Location:
+              $ref: '#/components/headers/JobLocation'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /jobs/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Прочитать состояние своего Job
+      description: |
+        Результат ищется сразу по id и хешу секрета. Чужой и отсутствующий Job
+        дают одинаковый 404 JOB_NOT_FOUND. Для failed возвращается HTTP 200
+        с сохранённой ошибкой в Job.error. Чтение не запускает обработку заново.
+      responses:
+        '200':
+          description: Сохранённый Job; polling незавершённого Job раз в 2 секунды
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              examples:
+                queued:
+                  $ref: '#/components/examples/QueuedJob'
+                failed:
+                  $ref: '#/components/examples/FailedJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /jobs/{job_id}/result:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      operationId: getJobResult
+      summary: Получить готовый отчёт своего Job
+      description: |
+        Чужой/отсутствующий Job — одинаковый 404. queued/running/retry_wait —
+        409 RESULT_NOT_READY; failed — 409 JOB_FAILED, причина читается в Job.error.
+        succeeded — 200 с неизменяемым отчётом. Частичных файлов и редиректов нет.
+        Если БД доступна, но нарушен инвариант наличия отчёта, вернуть
+        500 INTERNAL_ERROR, не пустой отчёт; терминальное состояние не переписывать.
+      responses:
+        '200':
+          description: Полный сохранённый отчёт, до 16 MiB UTF-8
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+        '409':
+          $ref: '#/components/responses/ResultUnavailable'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    ClientSecret:
+      type: http
+      scheme: bearer
+      bearerFormat: 64 lowercase hexadecimal characters, 32 random bytes
+      description: |
+        Анонимный секрет создаёт клиент криптографическим генератором и сохраняет
+        до первого POST. Формат ^[0-9a-f]{64}$. Любой корректный секрет определяет
+        собственную область Job; передачи секретов в URL нет. Сервер хранит SHA-256.
+        Отсутствующий, множественный или неверно оформленный Authorization — 401.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Один UUIDv4 на одну осознанную отправку; повтор сохраняет ключ и секрет.
+        Множественные значения заголовка запрещены. Ключ не истекает в v1.
+      schema:
+        $ref: '#/components/schemas/UuidV4'
+      example: 8b0f5a4e-92ac-4f70-9317-d262f0f7cc29
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      description: Неверный формат — 400; корректный чужой/отсутствующий ID — 404
+      schema:
+        $ref: '#/components/schemas/UuidV4'
+  headers:
+    JobLocation:
+      description: Путь чтения того же Job, без секрета
+      schema:
+        type: string
+        pattern: '^/api/v1/jobs/[0-9a-f-]{36}$'
+      example: /api/v1/jobs/37f7fb68-7165-4d19-8e12-86a813aa3a77
+    NoStore:
+      schema:
+        type: string
+        const: no-store
+    RetryAfter:
+      description: Минимум секунд до повтора HTTP-запроса; не меняет Job
+      schema:
+        type: integer
+        minimum: 1
+      example: 5
+  responses:
+    BadRequest:
+      description: |
+        400 INVALID_JSON, VALIDATION_ERROR или UNKNOWN_TOOL. Неверные JSON,
+        дублирующиеся ключи, глубина >8, пропущенные/лишние поля, тип/диапазон,
+        неверный UUID, query-параметры и неизвестная операция. Job не создаётся.
+        Ошибки параметров перечисляются в details с JSON Pointer или именем header/path.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            validation:
+              $ref: '#/components/examples/InvalidMatchId'
+            unknownTool:
+              value:
+                request_id: 15c0a9f3-92c6-46cb-86f1-b71d629c98b4
+                error:
+                  code: UNKNOWN_TOOL
+                  message: Операция не поддерживается
+                  retryable: false
+                  retry_at: null
+                  details:
+                    - location: body
+                      field: /operation
+                      reason: unknown_operation
+    Unauthorized:
+      description: 401 UNAUTHORIZED; секрет не передан или неверен по формату
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    IdempotencyConflict:
+      description: 409 IDEMPOTENCY_CONFLICT; ключ уже связан с другими параметрами
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            request_id: 15c0a9f3-92c6-46cb-86f1-b71d629c98b4
+            error:
+              code: IDEMPOTENCY_CONFLICT
+              message: Ключ уже использован для другого запроса
+              retryable: false
+              retry_at: null
+              details:
+                - location: header
+                  field: Idempotency-Key
+                  reason: already_used_with_other_parameters
+    JobNotFound:
+      description: 404 JOB_NOT_FOUND; одинаковое тело для чужого и отсутствующего Job
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            request_id: 15c0a9f3-92c6-46cb-86f1-b71d629c98b4
+            error:
+              code: JOB_NOT_FOUND
+              message: Задача не найдена
+              retryable: false
+              retry_at: null
+              details:
+                - location: path
+                  field: job_id
+                  reason: not_found
+    RouteNotFound:
+      description: 404 ROUTE_NOT_FOUND; маршрут отсутствует, существование Job не проверяется
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    MethodNotAllowed:
+      description: 405 METHOD_NOT_ALLOWED; details содержит method, состояние не меняется
+      headers:
+        Allow:
+          description: POST для /jobs, GET для /jobs/{job_id} и /jobs/{job_id}/result
+          schema:
+            type: string
+            enum: [POST, GET]
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    PayloadTooLarge:
+      description: 413 PAYLOAD_TOO_LARGE; тело больше 8192 байт, чтение прекращается до разбора
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UnsupportedMediaType:
+      description: 415 UNSUPPORTED_MEDIA_TYPE; нужен application/json UTF-8 без сжатия
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ResultUnavailable:
+      description: |
+        409 RESULT_NOT_READY для queued/running/retry_wait (retryable=true);
+        409 JOB_FAILED для failed (retryable=false). details указывает job.state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: |
+        503 STORAGE_UNAVAILABLE для недоступной БД; 503 QUEUE_FULL только при новом
+        POST, если уже 100 незавершённых Job. retryable=true, Retry-After=5.
+        При неопределённом commit сохранять ключ; 503 не доказывает отсутствие Job.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: 500 INTERNAL_ERROR; без stack trace и тела внешнего ответа, повтор с тем же ключом
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    UuidV4:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    UtcTime:
+      type: string
+      format: date-time
+      pattern: 'Z$'
+    NullableTime:
+      oneOf:
+        - $ref: '#/components/schemas/UtcTime'
+        - type: 'null'
+    MatchId:
+      type: string
+      pattern: '^[1-9][0-9]{0,19}$'
+      description: Нормализованный десятичный uint64, 1..18446744073709551615
+      x-maximum-decimal: '18446744073709551615'
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [operation, params]
+      properties:
+        operation:
+          type: string
+          const: analyze_match
+        params:
+          type: object
+          additionalProperties: false
+          required: [match_id]
+          properties:
+            match_id:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: '^[ \t\r\n]*[0-9]+[ \t\r\n]*$'
+              description: |
+                Только строка, не JSON number. После удаления краевых ASCII-пробелов
+                и ведущих нулей проверить диапазон 1..18446744073709551615.
+                Верхняя граница и запрет нуля — обязательная семантическая проверка.
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [location, field, reason]
+      properties:
+        location:
+          type: string
+          enum: [body, header, path, query, request, job, source]
+        field:
+          type: string
+          description: JSON Pointer тела/источника, имя параметра или служебного поля
+        reason:
+          type: string
+          minLength: 1
+          description: Краткая машинная причина, не исходное значение и не секрет
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable, retry_at, details]
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_JSON
+            - VALIDATION_ERROR
+            - UNKNOWN_TOOL
+            - UNAUTHORIZED
+            - IDEMPOTENCY_CONFLICT
+            - JOB_NOT_FOUND
+            - ROUTE_NOT_FOUND
+            - METHOD_NOT_ALLOWED
+            - PAYLOAD_TOO_LARGE
+            - UNSUPPORTED_MEDIA_TYPE
+            - RESULT_NOT_READY
+            - JOB_FAILED
+            - STORAGE_UNAVAILABLE
+            - QUEUE_FULL
+            - INTERNAL_ERROR
+            - MATCH_DATA_UNAVAILABLE
+            - SOURCE_DATA_INVALID
+            - SOURCE_RESPONSE_TOO_LARGE
+            - SOURCE_UNAVAILABLE
+            - SOURCE_RATE_LIMITED
+            - SOURCE_QUERY_TIMEOUT
+            - SOURCE_ACCESS_DENIED
+            - SOURCE_REQUEST_REJECTED
+            - SOURCE_PROTOCOL_ERROR
+            - PROCESSING_TIMEOUT
+            - RESULT_TOO_LARGE
+            - WORKER_LOST
+            - TOOL_VERSION_UNAVAILABLE
+            - TOOL_INPUT_INVALID
+            - TOOL_OUTPUT_INVALID
+            - INTERNAL_TOOL_ERROR
+        message:
+          type: string
+          minLength: 1
+          description: Без секретов, stack trace, сырого ответа источника и чужих данных
+        retryable:
+          type: boolean
+          description: Повтор запроса позднее может помочь; не обещание перезапуска терминального Job
+        retry_at:
+          $ref: '#/components/schemas/NullableTime'
+        details:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    NullableError:
+      oneOf:
+        - $ref: '#/components/schemas/Error'
+        - type: 'null'
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [request_id, error]
+      properties:
+        request_id:
+          $ref: '#/components/schemas/UuidV4'
+        error:
+          $ref: '#/components/schemas/Error'
+    Job:
+      type: object
+      additionalProperties: false
+      required: [job_id, operation, match_id, state, attempts, max_attempts, created_at, updated_at, finished_at, next_attempt_at, error, last_error, result_url]
+      properties:
+        job_id:
+          $ref: '#/components/schemas/UuidV4'
+        operation:
+          type: string
+          const: analyze_match
+        match_id:
+          $ref: '#/components/schemas/MatchId'
+        state:
+          type: string
+          enum: [queued, running, retry_wait, succeeded, failed]
+        attempts:
+          type: integer
+          minimum: 0
+          maximum: 3
+        max_attempts:
+          type: integer
+          const: 3
+        created_at:
+          $ref: '#/components/schemas/UtcTime'
+        updated_at:
+          $ref: '#/components/schemas/UtcTime'
+        finished_at:
+          $ref: '#/components/schemas/NullableTime'
+        next_attempt_at:
+          $ref: '#/components/schemas/NullableTime'
+        error:
+          $ref: '#/components/schemas/NullableError'
+        last_error:
+          $ref: '#/components/schemas/NullableError'
+        result_url:
+          type: [string, 'null']
+          pattern: '^/api/v1/jobs/[0-9a-f-]{36}/result$'
+      allOf:
+        - if:
+            properties:
+              state:
+                enum: [succeeded, failed]
+          then:
+            properties:
+              finished_at:
+                $ref: '#/components/schemas/UtcTime'
+              attempts:
+                minimum: 1
+          else:
+            properties:
+              finished_at:
+                type: 'null'
+        - if:
+            properties:
+              state:
+                const: succeeded
+          then:
+            properties:
+              result_url:
+                type: string
+          else:
+            properties:
+              result_url:
+                type: 'null'
+        - if:
+            properties:
+              state:
+                const: failed
+          then:
+            properties:
+              error:
+                $ref: '#/components/schemas/Error'
+          else:
+            properties:
+              error:
+                type: 'null'
+        - if:
+            properties:
+              state:
+                const: retry_wait
+          then:
+            properties:
+              next_attempt_at:
+                $ref: '#/components/schemas/UtcTime'
+              last_error:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - properties:
+                      retryable:
+                        const: true
+              attempts:
+                minimum: 1
+                maximum: 2
+          else:
+            properties:
+              next_attempt_at:
+                type: 'null'
+        - if:
+            properties:
+              state:
+                const: queued
+          then:
+            properties:
+              attempts:
+                maximum: 2
+        - if:
+            properties:
+              state:
+                const: running
+          then:
+            properties:
+              attempts:
+                minimum: 1
+    Warning:
+      type: object
+      additionalProperties: false
+      required: [code, field, message]
+      properties:
+        code:
+          type: string
+          enum: [OPTIONAL_DATA_MISSING, OPTIONAL_DATA_INVALID, OPTIONAL_DATA_UNSUPPORTED, OPTIONAL_DATA_TOO_LARGE, LABEL_UNAVAILABLE]
+        field:
+          type: string
+          description: JSON Pointer поля отчёта
+        message:
+          type: string
+          minLength: 1
+    Player:
+      type: object
+      additionalProperties: false
+      required: [player_slot, account_id, hero_id, hero_name, team, kills, deaths, assists, net_worth]
+      properties:
+        player_slot:
+          type: integer
+          minimum: 0
+        account_id:
+          type: string
+          pattern: '^[0-9]+$'
+        hero_id:
+          type: integer
+          minimum: 0
+        hero_name:
+          type: [string, 'null']
+        team:
+          type: integer
+          enum: [0, 1]
+        kills:
+          type: [integer, 'null']
+          minimum: 0
+        deaths:
+          type: [integer, 'null']
+          minimum: 0
+        assists:
+          type: [integer, 'null']
+          minimum: 0
+        net_worth:
+          type: [integer, 'null']
+          minimum: 0
+    ItemEvent:
+      type: object
+      additionalProperties: false
+      required: [player_slot, time_s, action, item_id, item_name]
+      properties:
+        player_slot: {type: integer, minimum: 0}
+        time_s: {type: number, minimum: 0}
+        action: {type: string, enum: [purchase, sale]}
+        item_id: {type: string, pattern: '^[0-9]+$'}
+        item_name: {type: [string, 'null']}
+    DeathEvent:
+      type: object
+      additionalProperties: false
+      required: [time_s, victim_slot, killer_slot]
+      properties:
+        time_s: {type: number, minimum: 0}
+        victim_slot: {type: integer, minimum: 0}
+        killer_slot: {type: [integer, 'null'], minimum: 0}
+    ObjectiveEvent:
+      type: object
+      additionalProperties: false
+      required: [time_s, objective_id, team]
+      properties:
+        time_s: {type: number, minimum: 0}
+        objective_id: {type: string, minLength: 1}
+        team: {type: [integer, 'null'], enum: [0, 1, null]}
+    EconomyPoint:
+      type: object
+      additionalProperties: false
+      required: [player_slot, time_s, net_worth]
+      properties:
+        player_slot: {type: integer, minimum: 0}
+        time_s: {type: number, minimum: 0}
+        net_worth: {type: integer, minimum: 0}
+    DamagePoint:
+      type: object
+      additionalProperties: false
+      required: [player_slot, time_s, hero_damage_total]
+      properties:
+        player_slot: {type: integer, minimum: 0}
+        time_s: {type: number, minimum: 0}
+        hero_damage_total:
+          type: number
+          minimum: 0
+          description: Подтверждённый накопительный урон героям; не отдельное попадание
+    Trajectory:
+      type: object
+      additionalProperties: false
+      required: [player_slot, interval_s, coordinate_system, points]
+      properties:
+        player_slot: {type: integer, minimum: 0}
+        interval_s: {type: number, exclusiveMinimum: 0}
+        coordinate_system: {type: string, const: deadlock_world_xy}
+        points:
+          type: array
+          maxItems: 20000
+          items:
+            type: object
+            additionalProperties: false
+            required: [time_s, x, y]
+            properties:
+              time_s: {type: number, minimum: 0}
+              x: {type: number}
+              y: {type: number}
+    Section:
+      type: object
+      required: [availability, reason, data]
+      description: |
+        available — данные проверены, включая пустой массив; unavailable — источник
+        не дал блока; invalid — блок повреждён; unsupported — неизвестная семантика
+        версии. Для трёх последних data=null, reason заполнено. Для available
+        reason=null. Повреждённый блок не заменяется пустым массивом.
+      properties:
+        availability:
+          type: string
+          enum: [available, unavailable, invalid, unsupported]
+        reason:
+          type: [string, 'null']
+        data: {}
+      allOf:
+        - if:
+            properties:
+              availability: {const: available}
+          then:
+            properties:
+              reason: {type: 'null'}
+              data: {type: array}
+          else:
+            properties:
+              reason: {type: string, minLength: 1}
+              data: {type: 'null'}
+    ItemSection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 20000
+              items: {$ref: '#/components/schemas/ItemEvent'}
+      unevaluatedProperties: false
+    DeathSection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 20000
+              items: {$ref: '#/components/schemas/DeathEvent'}
+      unevaluatedProperties: false
+    ObjectiveSection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 20000
+              items: {$ref: '#/components/schemas/ObjectiveEvent'}
+      unevaluatedProperties: false
+    EconomySection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 20000
+              items: {$ref: '#/components/schemas/EconomyPoint'}
+      unevaluatedProperties: false
+    DamageSection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 20000
+              items: {$ref: '#/components/schemas/DamagePoint'}
+      unevaluatedProperties: false
+    TrajectorySection:
+      allOf:
+        - $ref: '#/components/schemas/Section'
+        - properties:
+            data:
+              type: [array, 'null']
+              maxItems: 64
+              items: {$ref: '#/components/schemas/Trajectory'}
+      unevaluatedProperties: false
+    MatchReport:
+      type: object
+      additionalProperties: false
+      required: [schema_version, job_id, match_id, source, duration_s, winning_team, players, sections, warnings]
+      properties:
+        schema_version: {type: string, const: '1.0'}
+        job_id: {$ref: '#/components/schemas/UuidV4'}
+        match_id: {$ref: '#/components/schemas/MatchId'}
+        source:
+          type: object
+          additionalProperties: false
+          required: [name, fetched_at]
+          properties:
+            name: {type: string, const: deadlock-api.com}
+            fetched_at: {$ref: '#/components/schemas/UtcTime'}
+        duration_s: {type: number, exclusiveMinimum: 0}
+        winning_team: {type: [integer, 'null'], enum: [0, 1, null]}
+        players:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: {$ref: '#/components/schemas/Player'}
+        sections:
+          type: object
+          additionalProperties: false
+          required: [items, deaths, objectives, economy, damage, trajectories]
+          properties:
+            items: {$ref: '#/components/schemas/ItemSection'}
+            deaths: {$ref: '#/components/schemas/DeathSection'}
+            objectives: {$ref: '#/components/schemas/ObjectiveSection'}
+            economy: {$ref: '#/components/schemas/EconomySection'}
+            damage: {$ref: '#/components/schemas/DamageSection'}
+            trajectories: {$ref: '#/components/schemas/TrajectorySection'}
+        warnings:
+          type: array
+          maxItems: 200
+          items: {$ref: '#/components/schemas/Warning'}
+  examples:
+    QueuedJob:
+      value:
+        job_id: 37f7fb68-7165-4d19-8e12-86a813aa3a77
+        operation: analyze_match
+        match_id: '132598836'
+        state: queued
+        attempts: 0
+        max_attempts: 3
+        created_at: '2026-11-15T12:00:00Z'
+        updated_at: '2026-11-15T12:00:00Z'
+        finished_at: null
+        next_attempt_at: null
+        error: null
+        last_error: null
+        result_url: null
+    FailedJob:
+      value:
+        job_id: 37f7fb68-7165-4d19-8e12-86a813aa3a77
+        operation: analyze_match
+        match_id: '132598836'
+        state: failed
+        attempts: 1
+        max_attempts: 3
+        created_at: '2026-11-15T12:00:00Z'
+        updated_at: '2026-11-15T12:00:01Z'
+        finished_at: '2026-11-15T12:00:01Z'
+        next_attempt_at: null
+        error:
+          code: MATCH_DATA_UNAVAILABLE
+          message: Данные матча недоступны в источнике
+          retryable: false
+          retry_at: null
+          details:
+            - location: source
+              field: status
+              reason: http_404
+        last_error: null
+        result_url: null
+    InvalidMatchId:
+      value:
+        request_id: 15c0a9f3-92c6-46cb-86f1-b71d629c98b4
+        error:
+          code: VALIDATION_ERROR
+          message: Некорректные параметры запроса
+          retryable: false
+          retry_at: null
+          details:
+            - location: body
+              field: /params/match_id
+              reason: expected_positive_uint64_string
