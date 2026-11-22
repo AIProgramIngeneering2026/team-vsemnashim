@@ -1,0 +1,128 @@
+{
+  "match_info": {
+    "match_id": 132598836,
+    "duration_s": 2535,
+    "winning_team": 1,
+    "players": [
+      {
+        "player_slot": 2,
+        "account_id": 296645726,
+        "hero_id": 76,
+        "team": 0,
+        "kills": 3,
+        "deaths": 7,
+        "assists": 8,
+        "net_worth": 44456,
+        "items": [
+          {
+            "game_time_s": 101,
+            "item_id": 968099481,
+            "upgrade_id": 1,
+            "sold_time_s": 489,
+            "flags": 1
+          }
+        ],
+        "death_details": [
+          {
+            "game_time_s": 925,
+            "killer_player_slot": 11
+          }
+        ],
+        "stats": [
+          {
+            "time_stamp_s": 180,
+            "net_worth": 1829,
+            "player_damage": 900
+          },
+          {
+            "time_stamp_s": 360,
+            "net_worth": 3860,
+            "player_damage": 2422
+          }
+        ]
+      },
+      {
+        "player_slot": 11,
+        "account_id": 340209212,
+        "hero_id": 50,
+        "team": 1,
+        "kills": 4,
+        "deaths": 6,
+        "assists": 14,
+        "net_worth": 50170,
+        "items": [
+          {
+            "game_time_s": 67,
+            "item_id": 3862866912,
+            "upgrade_id": 1,
+            "sold_time_s": 1650,
+            "flags": 0
+          }
+        ],
+        "death_details": [
+          {
+            "game_time_s": 302,
+            "killer_player_slot": 1
+          }
+        ],
+        "stats": [
+          {
+            "time_stamp_s": 180,
+            "net_worth": 1932,
+            "player_damage": 888
+          },
+          {
+            "time_stamp_s": 360,
+            "net_worth": 3791,
+            "player_damage": 2893
+          }
+        ]
+      }
+    ],
+    "objectives": [
+      {
+        "team_objective_id": 3,
+        "team": 1,
+        "destroyed_time_s": 555
+      }
+    ],
+    "match_paths": {
+      "version": 1,
+      "interval_s": 1.0,
+      "x_resolution": 16383,
+      "y_resolution": 16383,
+      "paths": [
+        {
+          "player_slot": 2,
+          "x_min": -9248.4375,
+          "x_max": 8096.6562,
+          "y_min": -10194.781,
+          "y_max": 4433.9688,
+          "x_pos": [
+            7291,
+            7294
+          ],
+          "y_pos": [
+            20,
+            0
+          ]
+        },
+        {
+          "player_slot": 11,
+          "x_min": -9562.875,
+          "x_max": 8746.25,
+          "y_min": -7625.3125,
+          "y_max": 10336.375,
+          "x_pos": [
+            9487,
+            9487
+          ],
+          "y_pos": [
+            16381,
+            16383
+          ]
+        }
+      ]
+    }
+  }
+}
