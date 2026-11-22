@@ -15,7 +15,11 @@ public sealed class StaticCatalogProvider : ICatalogProvider
     private static readonly CatalogSnapshot Catalog = new("fixture-en-1",
         new DateTimeOffset(2026, 11, 8, 16, 36, 42, TimeSpan.Zero),
         new Dictionary<string, string> { ["76"] = "Graves", ["31"] = "Lash", ["15"] = "Bebop" }.ToImmutableDictionary(),
-        new Dictionary<string, string> { ["1976391348"] = "Cold Front", ["381961617"] = "Active Reload" }.ToImmutableDictionary());
+        new Dictionary<string, string>
+        {
+            ["1976391348"] = "Cold Front", ["381961617"] = "Active Reload",
+            ["968099481"] = "Extra Spirit", ["3862866912"] = "Restorative Shot"
+        }.ToImmutableDictionary());
 
     public CatalogSnapshot GetSnapshot() => Catalog;
 }

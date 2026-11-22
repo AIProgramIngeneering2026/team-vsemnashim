@@ -40,6 +40,27 @@ public sealed class BuildMatchReportTests
     }
 
     [Fact]
+    public async Task Ability_unlock_and_upgrade_do_not_hide_shop_transactions()
+    {
+        var report = await Build(info =>
+        {
+            var items = info["players"]![0]!["items"]!.AsArray();
+            items.Insert(0, JsonNode.Parse("""{"item_id":2001589780,"game_time_s":10,"upgrade_id":0,"flags":0}"""));
+            items.Add(JsonNode.Parse("""{"item_id":2001589780,"game_time_s":52,"upgrade_id":1995759105,"flags":0}"""));
+        });
+        var purchase = Assert.Single(report.Sections["items"].Data!.Value.EnumerateArray());
+        Assert.Equal("381961617", purchase.GetProperty("item_id").GetString());
+    }
+
+    [Fact]
+    public async Task Unknown_kind_cannot_be_misreported_as_a_purchase()
+    {
+        var report = await Build(i => i["players"]![0]!["items"]![0]!["item_id"] = "18446744073709551615");
+        Assert.Equal("unsupported", report.Sections["items"].Availability);
+        Assert.Null(report.Sections["items"].Data);
+    }
+
+    [Fact]
     public async Task Uncertain_item_flags_do_not_become_purchases()
     {
         var report = await Build(i => i["players"]![0]!["items"]![0]!["flags"] = 128);

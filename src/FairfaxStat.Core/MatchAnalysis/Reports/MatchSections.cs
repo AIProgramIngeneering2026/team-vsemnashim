@@ -63,13 +63,17 @@ internal sealed partial class MatchSections(BuildReportInput input, ReportWarnin
 
     private SectionIssue? AddItem(JsonElement row, int slot, List<ItemRow> output)
     {
-        if (row.Field("item_id").Id() is not string id || Time(row.Field("game_time_s")) is not double bought ||
-            row.Field("flags").NonNegativeInt() is not int flags || row.Field("upgrade_id").Id() is not string upgrade)
+        if (row.Field("item_id").Id() is not string id)
             return SectionIssue.Invalid;
-        if (flags is not (0 or 1))
+        var kind = ItemKinds.Classify(id);
+        if (kind == ItemKind.Ability)
+            return null;
+        if (kind == ItemKind.Unknown)
             return SectionIssue.Unsupported;
-        // The v1 fixture distinguishes shop items (upgrade_id 1) from ability unlocks and upgrades.
-        if (upgrade != "1")
+        if (Time(row.Field("game_time_s")) is not double bought || row.Field("flags").NonNegativeInt() is not int flags ||
+            row.Field("upgrade_id").Id() is not string upgrade)
+            return SectionIssue.Invalid;
+        if (flags is not (0 or 1) || upgrade != "1")
             return SectionIssue.Unsupported;
         if (Time(row.Field("sold_time_s")) is not double sold || (sold > 0 && sold < bought))
             return SectionIssue.Invalid;
